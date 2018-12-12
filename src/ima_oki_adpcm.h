@@ -23,14 +23,27 @@
 #define		IMA_OKI_ADPCM_CODE_LEN	256
 #define		IMA_OKI_ADPCM_PCM_LEN	(IMA_OKI_ADPCM_CODE_LEN *2)
 
+typedef enum {
+	IMA,
+	Dialogic_Software_Imp,
+	Dialogic_Hardware_Imp,
+	Dialogic_Auto
+} VOX_ALGORITHM;
+
+
 typedef struct
 {
 	/* private: */
 	int mask ;
 	int last_output ;
+	int last_output_other ;
 	int step_index ;
 	int max_step_index ;
-	int const * steps ;
+	long output_accu ; // use long to prewent overflow
+	long output_accu_other ;
+	VOX_ALGORITHM alg ;
+	VOX_ALGORITHM auto_alg ;
+
 
 	/* public: */
 	int errors ;
@@ -46,6 +59,7 @@ typedef enum
 } IMA_OKI_ADPCM_TYPE ;
 
 void ima_oki_adpcm_init		(IMA_OKI_ADPCM * state, IMA_OKI_ADPCM_TYPE type) ;
+void ima_oki_adpcm_init_alg	(IMA_OKI_ADPCM * state, VOX_ALGORITHM vox_alg);
 
 int	adpcm_decode	(IMA_OKI_ADPCM * state, int /* 0..15 */ code) ;
 int	adpcm_encode	(IMA_OKI_ADPCM * state, int /* -32768..32767 */ sample) ;

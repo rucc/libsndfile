@@ -30,6 +30,9 @@
 
 #define MIN_SAMPLE	-0x8000
 #define MAX_SAMPLE	0x7fff
+#define MIN_12B_SAMPLE	-0x400
+#define MAX_12B_SAMPLE	0x08ff
+#define ACCU_TRESHOLD 5000000
 
 static int const ima_steps [] =	/* ~16-bit precision */
 {	7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -41,79 +44,200 @@ static int const ima_steps [] =	/* ~16-bit precision */
 	32767
 } ;
 
-static int const oki_steps [] =	/* ~12-bit precision */
+static int const dia_sw_steps [] =	/* ~12-bit precision */
 {	256, 272, 304, 336, 368, 400, 448, 496, 544, 592, 656, 720, 800, 880, 960,
 	1056, 1168, 1280, 1408, 1552, 1712, 1888, 2080, 2288, 2512, 2768, 3040, 3344,
 	3680, 4048, 4464, 4912, 5392, 5936, 6528, 7184, 7904, 8704, 9568, 10528,
 	11584, 12736, 14016, 15408, 16960, 18656, 20512, 22576, 24832
 } ;
 
+static int const dia_hw_steps [] =
+{	16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+	50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+	157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+	494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552
+};
+
 static int const step_changes [] = { -1, -1, -1, -1, 2, 4, 6, 8 } ;
 
 void
 ima_oki_adpcm_init (IMA_OKI_ADPCM * state, IMA_OKI_ADPCM_TYPE type)
 {
-	memset (state, 0, sizeof (*state)) ;
-
 	if (type == IMA_OKI_ADPCM_TYPE_IMA)
-	{	state->max_step_index = ARRAY_LEN (ima_steps) - 1 ;
-		state->steps = ima_steps ;
-		state->mask = (~0) ;
-		}
+	{
+		ima_oki_adpcm_init_alg(state, IMA);
+	}
 	else
-	{	state->max_step_index = ARRAY_LEN (oki_steps) - 1 ;
-		state->steps = oki_steps ;
-		state->mask = arith_shift_left (~0, 4) ;
-		} ;
-
+	{
+		ima_oki_adpcm_init_alg(state, Dialogic_Auto);
+	};
 } /* ima_oki_adpcm_init */
 
+void ima_oki_adpcm_init_alg(IMA_OKI_ADPCM * state, VOX_ALGORITHM vox_alg)
+{
+	memset(state, 0, sizeof(*state));
+	state->alg = vox_alg;
+	state->step_index = state->last_output = state->last_output_other = 0;
+	switch (vox_alg)
+	{
+	case IMA:
+		state->max_step_index = ARRAY_LEN(ima_steps) - 1;
+		state->mask = (~0);
+		break;
+	case Dialogic_Software_Imp:
+	case Dialogic_Auto:
+		state->auto_alg = Dialogic_Software_Imp;
+		state->max_step_index = ARRAY_LEN(dia_sw_steps) - 1;
+		state->mask = state->mask = (~0) << 4;
+		state->output_accu = state->output_accu_other = 0;
+		break;
+	case Dialogic_Hardware_Imp:
+		state->max_step_index = ARRAY_LEN(dia_hw_steps) - 1;
+		break;
+	default:
+		break;
+	}
+}
 
-int
-adpcm_decode (IMA_OKI_ADPCM * state, int code)
-{	int s ;
-
-	s = ((code & 7) << 1) | 1 ;
-	s = ((state->steps [state->step_index] * s) >> 3) & state->mask ;
+void decode_sw_calc(int step, int code, int mask, int* last_output_inout, int* ret_out, int* err_cnt_out)
+{
+	*err_cnt_out = 0;
+	int s;
+	s = ((code & 7) << 1) | 1;
+	s = ((step * s) >> 3) & mask;
 
 	if (code & 8)
-		s = -s ;
-	s += state->last_output ;
+		s = -s;
+	s += *last_output_inout;
 
 	if (s < MIN_SAMPLE || s > MAX_SAMPLE)
-	{	int grace ;
-
-		grace = (state->steps [state->step_index] >> 3) & state->mask ;
-
+	{
+		int grace;
+		grace = (step >> 3) & mask;
 		if (s < MIN_SAMPLE - grace || s > MAX_SAMPLE + grace)
-			state->errors ++ ;
+			*err_cnt_out = 1;
+		s = s < MIN_SAMPLE ? MIN_SAMPLE : MAX_SAMPLE;
+	};
+	*last_output_inout = s;
+	*ret_out = s;
+}
 
-		s = s < MIN_SAMPLE ? MIN_SAMPLE : MAX_SAMPLE ;
-		} ;
+void decode_hw_calc(int step, int code, int* last_output_inout, int* ret_out, int* err_cnt_out)
+{
+	*err_cnt_out = 0;
+	int ssn = step;
+	char b3 = (code & 0b1000) / 0b1000;
+	char b2 = (code & 0b100) / 0b100;
+	char b1 = (code & 0b10) / 0b10;
+	char b0 = code & 0b1;
+	short dn = (ssn * b2) + (ssn / 2 * b1) + (ssn / 4 * b0) + (ssn / 8);
+	if (b3 == 1)
+	{
+		dn *= -1;
+	}
+	short xn = *last_output_inout + dn;
+	if (xn < MIN_12B_SAMPLE || xn > MAX_12B_SAMPLE)
+	{
+		int grace;
+		grace = step >> 3;
+		if (xn < MIN_12B_SAMPLE - grace || xn > MAX_12B_SAMPLE + grace)
+			*err_cnt_out = 1;
+		xn = xn < MIN_12B_SAMPLE ? MIN_12B_SAMPLE : MAX_12B_SAMPLE;
+	};
+	*last_output_inout = xn;
+	*ret_out = xn << 4;
+}
 
-	state->step_index += step_changes [code & 7] ;
-	state->step_index = SF_MIN (SF_MAX (state->step_index, 0), state->max_step_index) ;
-	state->last_output = s ;
+int adpcm_decode(IMA_OKI_ADPCM * state, int code)
+{
+	VOX_ALGORITHM algo = state->alg == Dialogic_Auto ? state->auto_alg : state->alg;
+	int ret = 0;
+	int err_cnt = 0;
 
-	return s ;
+	switch (algo)
+	{
+	case IMA:
+		decode_sw_calc(ima_steps[state->step_index], code, state->mask, &(state->last_output), &ret, &err_cnt);
+		break;
+	case Dialogic_Software_Imp:
+		decode_sw_calc(dia_sw_steps[state->step_index], code, state->mask, &(state->last_output), &ret, &err_cnt);
+		break;
+	case Dialogic_Hardware_Imp:
+		decode_hw_calc(dia_hw_steps[state->step_index], code, &(state->last_output), &ret, &err_cnt);
+		break;
+	}
+
+	if (state->alg == Dialogic_Auto)
+	{
+		VOX_ALGORITHM other_algo = algo == Dialogic_Software_Imp ? Dialogic_Hardware_Imp : Dialogic_Software_Imp;
+		int other_ret = 0;
+		int other_err_cnt = 0;
+		switch (other_algo)
+		{
+		case Dialogic_Software_Imp:
+			decode_sw_calc(dia_sw_steps[state->step_index], code, state->mask, &(state->last_output_other), &other_ret, &other_err_cnt);
+			break;
+		case Dialogic_Hardware_Imp:
+			decode_hw_calc(dia_hw_steps[state->step_index], code, &(state->last_output_other), &other_ret, &other_err_cnt);
+			break;
+		}
+		state->output_accu += ret;
+		state->output_accu_other += other_ret;
+		if (err_cnt > 0 || abs(state->output_accu) > ACCU_TRESHOLD)
+		{
+			if (other_err_cnt == 0 && abs(state->output_accu_other) < ACCU_TRESHOLD)
+			{
+				// other is better -> swap
+				state->auto_alg = other_algo;
+				ret = other_ret;
+				long accu_temp = state->output_accu;
+				state->output_accu = state->output_accu_other;
+				state->output_accu_other = accu_temp;
+				int last_out_temp = state->last_output;
+				state->last_output = state->last_output_other;
+				state->last_output_other = last_out_temp;
+			}
+			else
+			{
+				// other isn't better -> reset
+				state->step_index = state->last_output = state->last_output_other = 0;
+				state->output_accu = state->output_accu_other = 0;
+				ret = 0;
+			}
+		}
+	}
+
+	state->step_index += step_changes[code & 7];
+	state->step_index = SF_MIN(SF_MAX(state->step_index, 0), state->max_step_index);
+
+	return ret;
 } /* adpcm_decode */
 
-int
-adpcm_encode (IMA_OKI_ADPCM * state, int sample)
-{	int delta, sign = 0, code ;
+int adpcm_encode(IMA_OKI_ADPCM * state, int sample)
+{
+	VOX_ALGORITHM alg_temp = state->alg;
+	if (state->alg == Dialogic_Auto || state->alg == Dialogic_Hardware_Imp)
+	{
+		// we want to allow only one format for recording -> lets force the more modern SW version
+		state->alg = Dialogic_Software_Imp;
+	}
 
-	delta = sample - state->last_output ;
-
+	int delta, sign = 0, code;
+	delta = sample - state->last_output;
 	if (delta < 0)
-	{	sign = 8 ;
-		delta = -delta ;
-		} ;
+	{
+		sign = 8;
+		delta = -delta;
+	};
 
-	code = 4 * delta / state->steps [state->step_index] ;
-	code = sign | SF_MIN (code, 7) ;
-	adpcm_decode (state, code) ; /* Update encoder state */
+	int step = state->alg == IMA ? ima_steps[state->step_index] : dia_sw_steps[state->step_index];
+	code = 4 * delta / step;
 
-	return code ;
+	code = sign | SF_MIN(code, 7);
+	adpcm_decode(state, code); /* Update encoder state */
+	state->alg = alg_temp;
+	return code;
+
 } /* adpcm_encode */
 
 
