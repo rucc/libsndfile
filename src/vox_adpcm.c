@@ -71,7 +71,7 @@ int
 vox_adpcm_init (SF_PRIVATE *psf)
 {	IMA_OKI_ADPCM *pvox = NULL ;
 
-	if (psf->file.mode == SFM_RDWR)
+	if (psf->file.mode == SFM_RDWR && psf->sf.channels != 1)
 		return SFE_BAD_MODE_RW ;
 
 	if (psf->file.mode == SFM_WRITE && psf->sf.channels != 1)
@@ -83,13 +83,13 @@ vox_adpcm_init (SF_PRIVATE *psf)
 	psf->codec_data = (void*) pvox ;
 	memset (pvox, 0, sizeof (IMA_OKI_ADPCM)) ;
 
-	if (psf->file.mode == SFM_WRITE)
+	if (psf->file.mode == SFM_WRITE || psf->file.mode == SFM_RDWR)
 	{	psf->write_short	= vox_write_s ;
 		psf->write_int		= vox_write_i ;
 		psf->write_float	= vox_write_f ;
 		psf->write_double	= vox_write_d ;
-		}
-	else
+	}
+	if (psf->file.mode == SFM_READ || psf->file.mode == SFM_RDWR)
 	{	psf_log_printf (psf, "Header-less OKI Dialogic ADPCM encoded file.\n") ;
 		psf_log_printf (psf, "Setting up for 8kHz, mono, Vox ADPCM.\n") ;
 
@@ -105,13 +105,15 @@ vox_adpcm_init (SF_PRIVATE *psf)
 	psf->sf.channels	= 1 ;
 
 	psf->sf.frames = psf->filelength * 2 ;
+	psf->bytewidth = 1;
+	psf->blockwidth = 1;
 
-	psf->sf.seekable = SF_FALSE ;
+	psf->sf.seekable = SF_TRUE ;
 	psf->codec_close = codec_close ;
 
 	/* Seek back to start of data. */
-	if (psf_fseek (psf, 0 , SEEK_SET) == -1)
-		return SFE_BAD_SEEK ;
+	/*if (psf_fseek (psf, 0 , SEEK_SET) == -1)
+		return SFE_BAD_SEEK ;*/
 
 	ima_oki_adpcm_init (pvox, IMA_OKI_ADPCM_TYPE_OKI) ;
 
