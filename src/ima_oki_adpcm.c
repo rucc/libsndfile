@@ -183,27 +183,39 @@ int adpcm_decode(IMA_OKI_ADPCM * state, int code)
 		}
 		state->output_accu += ret;
 		state->output_accu_other += other_ret;
-		if (err_cnt > 0 || abs(state->output_accu) > ACCU_TRESHOLD)
+		int swap = 0;
+		if (abs(state->output_accu) > ACCU_TRESHOLD)
 		{
-			if (other_err_cnt == 0 && abs(state->output_accu_other) < ACCU_TRESHOLD)
+			if (abs(state->output_accu_other) < ACCU_TRESHOLD)
 			{
-				// other is better -> swap
-				state->auto_alg = other_algo;
-				ret = other_ret;
-				long accu_temp = state->output_accu;
-				state->output_accu = state->output_accu_other;
-				state->output_accu_other = accu_temp;
-				int last_out_temp = state->last_output;
-				state->last_output = state->last_output_other;
-				state->last_output_other = last_out_temp;
+				swap = 1;
 			}
 			else
 			{
 				// other isn't better -> reset
 				state->step_index = state->last_output = state->last_output_other = 0;
 				state->output_accu = state->output_accu_other = 0;
+				err_cnt = other_err_cnt = 0;
 				ret = 0;
 			}
+		}
+		else if (err_cnt < other_err_cnt) // accu_treshold is more important than err_cnt
+		{
+			swap = 1;
+		}
+		if (swap)
+		{
+			state->auto_alg = other_algo;
+			ret = other_ret;
+			long accu_temp = state->output_accu;
+			state->output_accu = state->output_accu_other;
+			state->output_accu_other = accu_temp;
+			int last_out_temp = state->last_output;
+			state->last_output = state->last_output_other;
+			state->last_output_other = last_out_temp;
+			int err_cnt_temp = err_cnt;
+			err_cnt = other_err_cnt;
+			other_err_cnt = err_cnt_temp;
 		}
 	}
 
