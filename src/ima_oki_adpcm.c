@@ -30,8 +30,8 @@
 
 #define MIN_SAMPLE	-0x8000
 #define MAX_SAMPLE	0x7fff
-#define MIN_12B_SAMPLE	-0x400
-#define MAX_12B_SAMPLE	0x08ff
+#define MIN_12B_SAMPLE	-0x800
+#define MAX_12B_SAMPLE	0x07ff
 #define ACCU_TRESHOLD 5000000
 
 static int const ima_steps [] =	/* ~16-bit precision */
