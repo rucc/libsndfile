@@ -199,7 +199,7 @@ int adpcm_decode(IMA_OKI_ADPCM * state, int code)
 				ret = 0;
 			}
 		}
-		else if (err_cnt < other_err_cnt) // accu_treshold is more important than err_cnt
+		else if (err_cnt > other_err_cnt && abs(state->output_accu_other) < ACCU_TRESHOLD) // accu_treshold is more important than err_cnt
 		{
 			swap = 1;
 		}
